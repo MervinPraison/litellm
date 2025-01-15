@@ -1,16 +1,38 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Streaming + Async
 
-- [Streaming Responses](#streaming-responses)
-- [Async Completion](#async-completion)
+| Feature | LiteLLM SDK | LiteLLM Proxy |
+|---------|-------------|---------------|
+| Streaming | ✅ [start here](#streaming-responses) | ✅ [start here](../proxy/user_keys#streaming) |
+| Async | ✅ [start here](#async-completion) | ✅ [start here](../proxy/user_keys#streaming) |
+| Async Streaming | ✅ [start here](#async-streaming) | ✅ [start here](../proxy/user_keys#streaming) |
 
 ## Streaming Responses
 LiteLLM supports streaming the model response back by passing `stream=True` as an argument to the completion function
 ### Usage
 ```python
+from litellm import completion
+messages = [{"role": "user", "content": "Hey, how's it going?"}]
 response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-for chunk in response:
-    print(chunk['choices'][0]['delta'])
+for part in response:
+    print(part.choices[0].delta.content or "")
+```
 
+### Helper function
+
+LiteLLM also exposes a helper function to rebuild the complete streaming response from the list of chunks. 
+
+```python
+from litellm import completion
+messages = [{"role": "user", "content": "Hey, how's it going?"}]
+response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+
+for chunk in response: 
+    chunks.append(chunk)
+
+print(litellm.stream_chunk_builder(chunks, messages=messages))
 ```
 
 ## Async Completion
@@ -35,39 +57,94 @@ print(response)
 We've implemented an `__anext__()` function in the streaming object returned. This enables async iteration over the streaming object. 
 
 ### Usage
-Here's an example of using it with openai. But this 
+Here's an example of using it with openai.
 ```python
-from litellm import completion
-import asyncio, os, traceback, time
-
-os.environ["OPENAI_API_KEY"] = "your-api-key"
-
-def logger_fn(model_call_object: dict):
-    print(f"LOGGER FUNCTION: {model_call_object}")
-
-
-user_message = "Hello, how are you?"
-messages = [{"content": user_message, "role": "user"}]
+from litellm import acompletion
+import asyncio, os, traceback
 
 async def completion_call():
     try:
-        response = completion(
-            model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn
+        print("test acompletion + streaming")
+        response = await acompletion(
+            model="gpt-3.5-turbo", 
+            messages=[{"content": "Hello, how are you?", "role": "user"}], 
+            stream=True
         )
         print(f"response: {response}")
-        complete_response = ""
-        start_time = time.time()
-        # Change for loop to async for loop
         async for chunk in response:
-            chunk_time = time.time()
-            print(f"time since initial request: {chunk_time - start_time:.5f}")
-            print(chunk["choices"][0]["delta"])
-            complete_response += chunk["choices"][0]["delta"].get("content", "")
-        if complete_response == "": 
-            raise Exception("Empty response received")
+            print(chunk)
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
 asyncio.run(completion_call())
 ```
+
+## Error Handling - Infinite Loops
+
+Sometimes a model might enter an infinite loop, and keep repeating the same chunks - [e.g. issue](https://github.com/BerriAI/litellm/issues/5158)
+
+Break out of it with: 
+
+```python
+litellm.REPEATED_STREAMING_CHUNK_LIMIT = 100 # # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
+```
+
+LiteLLM provides error handling for this, by checking if a chunk is repeated 'n' times (Default is 100). If it exceeds that limit, it will raise a `litellm.InternalServerError`, to allow retry logic to happen. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm 
+import os 
+
+litellm.set_verbose = False
+loop_amount = litellm.REPEATED_STREAMING_CHUNK_LIMIT + 1
+chunks = [
+    litellm.ModelResponse(**{
+    "id": "chatcmpl-123",
+    "object": "chat.completion.chunk",
+    "created": 1694268190,
+    "model": "gpt-3.5-turbo-0125",
+    "system_fingerprint": "fp_44709d6fcb",
+    "choices": [
+        {"index": 0, "delta": {"content": "How are you?"}, "finish_reason": "stop"}
+    ],
+}, stream=True)
+] * loop_amount
+completion_stream = litellm.ModelResponseListIterator(model_responses=chunks)
+
+response = litellm.CustomStreamWrapper(
+    completion_stream=completion_stream,
+    model="gpt-3.5-turbo",
+    custom_llm_provider="cached_response",
+    logging_obj=litellm.Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    ),
+)
+
+for chunk in response:
+    continue # expect to raise InternalServerError 
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+Define this on your config.yaml on the proxy. 
+
+```yaml
+litellm_settings:
+    REPEATED_STREAMING_CHUNK_LIMIT: 100 # this overrides the litellm default
+```
+
+The proxy uses the litellm SDK. To validate this works, try the 'SDK' code snippet. 
+
+</TabItem>
+</Tabs>

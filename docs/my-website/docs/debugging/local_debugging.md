@@ -5,6 +5,7 @@ There's 2 ways to do local debugging - `litellm.set_verbose=True` and by passing
 
 This is good for getting print statements for everything litellm is doing.
 ```python
+import litellm
 from litellm import completion
 
 litellm.set_verbose=True # 👈 this is the 1-line change you need to make
@@ -21,6 +22,14 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 # cohere call
 response = completion("command-nightly", messages)
 ```
+
+## JSON Logs 
+
+If you need to store the logs as JSON, just set the `litellm.json_logs = True`.
+
+We currently just log the raw POST request from litellm as a JSON - [**See Code**]. 
+
+[Share feedback here](https://github.com/BerriAI/litellm/issues)
 
 ## Logger Function 
 But sometimes all you care about is seeing exactly what's getting sent to your api call and what's being returned - e.g. if the api call is failing, why is that happening? what are the exact params being set? 
